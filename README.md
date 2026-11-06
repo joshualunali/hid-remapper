@@ -89,6 +89,61 @@ To compile the nRF52 firmware, you can either follow [Nordic's setup instruction
 docker run --rm -v $(pwd):/workdir/project -w /workdir/project/firmware-bluetooth nordicplayground/nrfconnect-sdk:v2.2-branch west build -b seeed_xiao_nrf52840
 ```
 
+The nRF52 firmware can be built for `adafruit_feather_nrf52840`, `seeed_xiao_nrf52840` or `nice_nano`.
+
+## Debugging the Bluetooth version
+
+If a Bluetooth device connects but its inputs don't come through, start with these checks:
+
+1. Open the Monitor tab in the [web configuration tool](https://www.remapper.org/config/) and use the device. If its inputs appear there, the Bluetooth connection is fine and the problem is in your mappings or on the USB side.
+2. Make sure the device isn't also connected to something else. If it's a ZMK keyboard, unplug it from USB (or select Bluetooth output with `&out OUT_BLE`), select the profile that's paired with the remapper, and on a split keyboard pair with the central half.
+3. Click "Forget all devices", remove the remapper from the device's own list of paired devices, then click "Pair new device" and pair again. A pairing that only one side remembers will fail at the encryption step.
+4. If it still doesn't work, compile the debug build described below and check its LED codes.
+
+### Debug build
+
+In the normal firmware the LEDs stay off, except that the status LED is lit constantly in pairing mode. A debug build uses the status LED to show how far connection setup has got, and also pulses the activity LED, on boards that have one, when an input report arrives. The status LED is blue on most boards, but it's red on some nice!nano clones.
+
+To compile it, add `-- -DREMAPPER_DEBUG_STAGES=1` to the build command:
+
+```
+docker run --rm -v $(pwd):/workdir/project -w /workdir/project/firmware-bluetooth nordicplayground/nrfconnect-sdk:v2.2-branch west build -b nice_nano -- -DREMAPPER_DEBUG_STAGES=1
+```
+
+All builds also write logs to the board's serial TX pin at 921600 baud, if you have a USB serial adapter.
+
+### Debug build LED codes
+
+The status LED repeats a group of slow blinks. If a step failed, a one second pause and a group of fast blinks follow. The code for a failed step stays until the next successful step or the next connection, and a single failure can clear itself if the device connects successfully afterwards.
+
+The number of slow blinks is the last step that passed, and any fast blinks mean that the next step failed:
+
+Slow blinks | Last step that passed | Fast blinks mean this step failed
+----------- | --------------------- | ---------------------------------
+1 | scanning | connecting to the device
+2 | Bluetooth connection established | encryption or pairing
+3 | connection encrypted | finding the device's HID service
+4 | HID service found | HID setup
+5 | subscribed to input reports | reading the report descriptor
+6 | report descriptor read | no fast blinks at this step
+7 | input report received | no fast blinks at this step
+
+If it stays at 6 while you use the device, setup worked but the device isn't sending anything. If it reaches 7 and the Monitor tab stays empty, reports are arriving but aren't being parsed.
+
+The number of fast blinks is the error code, capped at 30:
+
+Code | Meaning
+---- | -------
+4 slow, 22 fast | the device's report types don't match their properties in a way the firmware can't correct
+4 slow, 30 fast | an error code of 30 or higher, usually a HID information, report reference or protocol mode value of an unexpected size
+3 slow, 2 fast | the device doesn't have a HID service
+5 slow, 30 fast | the report descriptor is longer than the 512 bytes the firmware can store
+4 slow, 5 or 15 fast | the device says the connection isn't secure enough (authentication or encryption)
+
+Fast blink counts from 2 slow blinks are Zephyr's `bt_security_err` values. Other counts from 4 slow blinks are usually Bluetooth ATT error codes returned by the device.
+
+The fast blinks are hard to count by eye, so it helps to film them. Each one takes about 0.22 seconds.
+
 ## License
 
 The software in this repository is licensed under the [MIT License](LICENSE), unless stated otherwise.
